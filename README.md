@@ -364,9 +364,6 @@ $session | Stop-EtwCapture
 
 - [ETWInspector (original)](https://github.com/jonny-jhnson/ETWInspector) — base project
 - [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) — kernel-mode event source
-- [Microsoft.Diagnostics.Tracing.TraceEvent](https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent) — ETL parsing library
-- [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) — TraceLogging static analysis
-- [Fody / Costura.Fody](https://github.com/Fody/Costura) — single-DLL embedding
 
 ---
 
