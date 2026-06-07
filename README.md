@@ -376,4 +376,3 @@ The `TartarusGatePOC` is provided **for defensive security research only** — t
 ## Credits
 
 Original ETWInspector developed by [jonny-jhnson](https://github.com/jonny-jhnson).  
-Thanks to Olaf Hartong and Matt Graeber for testing feedback on the original project.
