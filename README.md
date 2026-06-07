@@ -1,6 +1,6 @@
 # SyscallHunter
 
-> **Fork of [ETWInspector](https://github.com/tsale/ETWInspector)** — extended with an automated direct/indirect syscall detection pipeline built on ETW + Sysmon.
+> **Fork of [ETWInspector](https://github.com/jonny-jhnson/ETWInspector)** — extended with an automated direct/indirect syscall detection pipeline built on ETW + Sysmon.
 
 ETWInspector is a comprehensive Event Tracing for Windows (ETW) toolkit for enumerating providers and capturing traces. This fork adds three new cmdlets and a full research pipeline for detecting syscall-based evasion techniques (Hell's Gate, Tartarus' Gate, direct syscalls) commonly used by malware and red-team tooling.
 
@@ -362,7 +362,7 @@ $session | Stop-EtwCapture
 
 ## Resources
 
-- [ETWInspector (original)](https://github.com/tsale/ETWInspector) — base project
+- [ETWInspector (original)](https://github.com/jonny-jhnson/ETWInspector) — base project
 - [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) — kernel-mode event source
 - [Microsoft.Diagnostics.Tracing.TraceEvent](https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent) — ETL parsing library
 - [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) — TraceLogging static analysis
@@ -378,5 +378,5 @@ The `TartarusGatePOC` is provided **for defensive security research only** — t
 
 ## Credits
 
-Original ETWInspector developed by [tsale](https://github.com/tsale).  
+Original ETWInspector developed by [jonny-jhnson](https://github.com/jonny-jhnson).  
 Thanks to Olaf Hartong and Matt Graeber for testing feedback on the original project.
