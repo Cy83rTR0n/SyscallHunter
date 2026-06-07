@@ -45,7 +45,10 @@ CmdletsToExport = 'Get-EtwProviders',
                   'Start-EtwCapture',
                   'Stop-EtwCapture',
                   'Export-EtwSnapshot',
-                  'Compare-EtwSnapshot'
+                  'Compare-EtwSnapshot',
+                  'Import-EtwFile',
+                  'Get-EtwKeywordMask',
+                  'Receive-EtwCapture'
 
 # Private data to pass to the module specified in RootModule/ModuleToProcess. This may also contain a PSData hashtable with additional module metadata used by PowerShell.
 PrivateData = @{

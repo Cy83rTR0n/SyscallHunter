@@ -5,3 +5,21 @@
 [Oo]bj/
 .DS_Store
 .claude/
+
+# Built module artifacts - build from source, don't commit binaries
+EtwInspector/EtwInspectorModule/bin/*.dll
+EtwInspector/EtwInspectorModule/bin/*.pdb
+EtwInspector/EtwInspectorModule/bin/*.dll.bak
+
+# POC build output
+TartarusGatePOC/*.obj
+TartarusGatePOC/*.exe
+TartarusGatePOC/x64/
+
+# Research output (ETL captures, snapshots from test runs)
+*.etl
+*.ndjson
+research/
+
+# Internal session notes
+CLAUDE.md

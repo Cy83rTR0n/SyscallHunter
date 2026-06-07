@@ -1,0 +1,26 @@
+<Sysmon schemaversion="4.90">
+    <EventFiltering>
+
+        <!-- ProcessAccess (Event 10): capture high-privilege cross-process opens.
+             0x1FFFFF = PROCESS_ALL_ACCESS (our POC uses this)
+             0x1F3FFF = older PROCESS_ALL_ACCESS
+             0x143A   = common Cobalt Strike / injection mask -->
+        <RuleGroup name="ProcessAccess" groupRelation="or">
+            <ProcessAccess onmatch="include">
+                <GrantedAccess condition="is">0x1FFFFF</GrantedAccess>
+                <GrantedAccess condition="is">0x1F3FFF</GrantedAccess>
+                <GrantedAccess condition="is">0x143A</GrantedAccess>
+                <GrantedAccess condition="is">0x40</GrantedAccess>
+            </ProcessAccess>
+        </RuleGroup>
+
+        <!-- CreateRemoteThread (Event 8): capture all cross-process thread creation
+             except noise from known system DLL loaders -->
+        <RuleGroup name="CreateRemoteThread" groupRelation="or">
+            <CreateRemoteThread onmatch="include">
+                <TargetImage condition="is not">C:\Windows\System32\svchost.exe</TargetImage>
+            </CreateRemoteThread>
+        </RuleGroup>
+
+    </EventFiltering>
+</Sysmon>
