@@ -1,239 +1,382 @@
-# ETWInspector
-EtwInspector is a comprehensive Event Tracing for Windows (ETW) toolkit designed to simplify the enumeration of ETW providers and trace session properties.
+# SyscallHunter
 
-Developed in C#, EtwInspector is easily accessible as a PowerShell module, making it user-friendly and convenient. This tool aims to be a one-stop solution for all ETW-related tasks-from discovery and inspection to trace capturing.
+> **Fork of [ETWInspector](https://github.com/tsale/ETWInspector)** — extended with an automated direct/indirect syscall detection pipeline built on ETW + Sysmon.
 
-## Instructions
-### PowerShell Gallery
+ETWInspector is a comprehensive Event Tracing for Windows (ETW) toolkit for enumerating providers and capturing traces. This fork adds three new cmdlets and a full research pipeline for detecting syscall-based evasion techniques (Hell's Gate, Tartarus' Gate, direct syscalls) commonly used by malware and red-team tooling.
+
+---
+
+## What's new in this fork
+
+| Addition | Type | Purpose |
+|---|---|---|
+| `Import-EtwFile` | Cmdlet | Parse an `.etl` file into PowerShell objects |
+| `Get-EtwKeywordMask` | Cmdlet | Build a keyword bitmask from human-readable keyword names |
+| `Receive-EtwCapture` | Cmdlet | Stream live ETW events from a running capture session |
+| `Invoke-SyscallDetect.ps1` | Script | End-to-end automated detection pipeline |
+| `TartarusGatePOC/` | C + MASM | Research POC to validate the detection pipeline |
+| `sysmon-config.xml` | Config | Sysmon rules tuned for ProcessAccess + CreateRemoteThread |
+
+---
+
+## How the detection works
+
+Modern malware bypasses user-mode EDR hooks on `ntdll.dll` using two techniques:
+
+**Direct syscall** — the malware embeds the `syscall` instruction in its own code alongside the raw System Service Number (SSN). No ntdll is involved, so any inline hooks placed there are skipped entirely.
+
+**Indirect syscall** — the malware resolves ntdll's own `syscall;ret` gadget address and jumps to it. The kernel sees the return address as inside ntdll, making the call look legitimate at first glance.
+
+Both techniques are detected by analysing the **Sysmon Event 10 `CallTrace`** field, which Sysmon captures via kernel-mode stack walking — a layer that cannot be bypassed from user mode.
+
 ```
-PS > Install-Module EtwInspector
-PS > Import-Module EtwInspector
+Legitimate API call:
+  ntdll.dll        <- syscall
+  KERNELBASE.dll   <- OpenProcess() implementation  <- frame[1]
+  KERNEL32.DLL     <- OpenProcess() stub
+  caller.exe
+
+Indirect syscall (detected):
+  ntdll.dll        <- gadget jumped to by attacker  <- frame[0]: ntdll
+  attacker.exe     <- ZwOpenProcess call site        <- frame[1]: NOT KERNELBASE
+  attacker.exe     <- main()
+  KERNEL32.DLL     <- BaseThreadInitThunk (normal thread epilogue)
+  ntdll.dll        <- RtlUserThreadStart
+
+Direct syscall (detected):
+  attacker.exe     <- syscall ran here               <- frame[0]: NOT ntdll
+  attacker.exe
+  ...
+```
+
+The key signal: **frame\[1\] immediately after ntdll is the attacker's own module**, bypassing the normal `KERNELBASE → KERNEL32` API chain. `KERNEL32.DLL` at the *bottom* of the trace is the standard thread startup epilogue (`BaseThreadInitThunk`) present in every Windows stack and is intentionally ignored.
+
+---
+
+## Prerequisites
+
+- Windows 10/11 x64
+- PowerShell 5.1 (run as Administrator)
+- [Sysmon v13+](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) installed with the provided config
+- EtwInspector module built or installed (see below)
+
+### Install Sysmon with the detection config
+
+```powershell
+# First install
+sysmon64 -accepteula -i TartarusGatePOC\sysmon-config.xml
+
+# Update existing install
+sysmon64 -c TartarusGatePOC\sysmon-config.xml
+```
+
+---
+
+## Installation
+
+### Option A — PowerShell Gallery (original cmdlets only)
+
+```powershell
+Install-Module EtwInspector
+Import-Module EtwInspector
+```
+
+### Option B — Build from source (includes new cmdlets)
+
+```powershell
+# Requires .NET SDK or Visual Studio
+dotnet build EtwInspector\EtwInspector.sln -c Release
+
+# Copy output into the module
+Copy-Item EtwInspector\bin\Release\EtwInspector.dll `
+          EtwInspector\EtwInspectorModule\bin\EtwInspector.dll -Force
+
+# Load the module
+Import-Module .\EtwInspector\EtwInspectorModule\EtwInspector.psd1 -Force
+```
+
+### Verify all cmdlets are available
+
+```
 PS > Get-Command -Module EtwInspector
 
-CommandType     Name                                               Version    Source
------------     ----                                               -------    ------
-Cmdlet          Compare-EtwSnapshot                                1.2.0      EtwInspector
-Cmdlet          Export-EtwSnapshot                                 1.2.0      EtwInspector
-Cmdlet          Get-EtwProviders                                   1.2.0      EtwInspector
-Cmdlet          Get-EtwSecurityDescriptor                          1.2.0      EtwInspector
-Cmdlet          Get-EtwTraceSessions                               1.2.0      EtwInspector
-Cmdlet          Start-EtwCapture                                   1.2.0      EtwInspector
-Cmdlet          Stop-EtwCapture                                    1.2.0      EtwInspector
-```
-Module page: https://www.powershellgallery.com/packages/EtwInspector
-
-### Import Directly
-1. Import EtwInspector via: 
-```
-PS > Import-Module EtwInspector.psd1
-```
-You may need to go to the file and press "unblock" if you get an error about importing the module and its depedencies. 
-
-2. Get a list of available commands within the module: 
-```
-PS > Get-Command -Module EtwInspector
-
-CommandType     Name                                               Version    Source
------------     ----                                               -------    ------
-Cmdlet          Compare-EtwSnapshot                                1.0        EtwInspector
-Cmdlet          Export-EtwSnapshot                                 1.0        EtwInspector
-Cmdlet          Get-EtwProviders                                   1.0        EtwInspector
-Cmdlet          Get-EtwSecurityDescriptor                          1.0        EtwInspector
-Cmdlet          Get-EtwTraceSessions                               1.0        EtwInspector
-Cmdlet          Start-EtwCapture                                   1.0        EtwInspector
-Cmdlet          Stop-EtwCapture                                    1.0        EtwInspector
+CommandType  Name                      Version
+-----------  ----                      -------
+Cmdlet       Compare-EtwSnapshot       1.3.0
+Cmdlet       Export-EtwSnapshot        1.3.0
+Cmdlet       Get-EtwKeywordMask        1.3.0
+Cmdlet       Get-EtwProviders          1.3.0
+Cmdlet       Get-EtwSecurityDescriptor 1.3.0
+Cmdlet       Get-EtwTraceSessions      1.3.0
+Cmdlet       Import-EtwFile            1.3.0
+Cmdlet       Receive-EtwCapture        1.3.0
+Cmdlet       Start-EtwCapture          1.3.0
+Cmdlet       Stop-EtwCapture           1.3.0
 ```
 
-### Enumeration Steps
+---
 
-#### ETW Providers
-`Get-EtwProviders` allows a user to enumerate Manifest, MOF, and Tracelogging providers. Depending on the provider type that is being queried, some functionality is more advanced then others. 
+## Detection pipeline — Invoke-SyscallDetect.ps1
 
-Example 1: Enumerating Manifest/MOF providers that have "Threat" in the provider name
-
-```
-PS > $EnumProviders = Get-EtwProviders -ProviderName Threat
-
-PS > $EnumProviders
-
-RegisteredProviders                     TraceloggingProviders
--------------------                     ---------------------
-{Microsoft-Windows-Threat-Intelligence}
-
-
-PS > $EnumProviders.RegisteredProviders
-
-providerGuid       : f4e1897c-bb5d-5668-f1d8-040f4d8dd344
-providerName       : Microsoft-Windows-Threat-Intelligence
-resourceFilePath   : %SystemRoot%\system32\Microsoft-Windows-System-Events.dll
-schemaSource       : Manifest
-eventKeywords      : {KERNEL_THREATINT_KEYWORD_ALLOCVM_LOCAL, KERNEL_THREATINT_KEYWORD_ALLOCVM_LOCAL_KERNEL_CALLER,
-                     KERNEL_THREATINT_KEYWORD_ALLOCVM_REMOTE, KERNEL_THREATINT_KEYWORD_ALLOCVM_REMOTE_KERNEL_CALLER...}
-eventMetadata      : {1, 2, 2, 2...}
-securityDescriptor : EtwInspector.Provider.Enumeration.EventTraceSecurity
-```
-
-Example 2: Enumerating Manifest providers that have "ReadVm" in a property field
-```
-PS > $EnumProviders = Get-EtwProviders -PropertyString ReadVm
-
-PS > $EnumProviders
-
-RegisteredProviders                     TraceloggingProviders
--------------------                     ---------------------
-{Microsoft-Windows-Threat-Intelligence}
-
-
-PS > $EnumProviders.RegisteredProviders
-
-providerGuid       : f4e1897c-bb5d-5668-f1d8-040f4d8dd344
-providerName       : Microsoft-Windows-Threat-Intelligence
-resourceFilePath   : %SystemRoot%\system32\Microsoft-Windows-System-Events.dll
-schemaSource       : Manifest
-eventKeywords      : {KERNEL_THREATINT_KEYWORD_ALLOCVM_LOCAL, KERNEL_THREATINT_KEYWORD_ALLOCVM_LOCAL_KERNEL_CALLER,
-                     KERNEL_THREATINT_KEYWORD_ALLOCVM_REMOTE, KERNEL_THREATINT_KEYWORD_ALLOCVM_REMOTE_KERNEL_CALLER...}
-eventMetadata      : {1, 2, 2, 2...}
-securityDescriptor : EtwInspector.Provider.Enumeration.EventTraceSecurity
-```
-
-Example 3: Enumerating tracelogging providers that exist in kerberos.dll
+The script automates the full research workflow:
 
 ```
-PS > $EnumProviders = Get-EtwProviders -ProviderType TraceLogging -FilePath C:\Windows\System32\kerberos.dll
-
-PS > $EnumProviders.TraceloggingProviders.Providers
-
-ProviderGUID                         ProviderName                           ProviderGroupGUID
-------------                         ------------                           -----------------
-{ad5162d8-daf0-4a25-94a8-af80668765dc} Microsoft.Windows.Security.Kerberos
-{ba2257e2-6cf5-4cea-9f8d-3df7d35ddec5} Microsoft.Windows.Security.SspCommon
-{1e988a17-2d61-403d-b300-7787790fb2cb} Microsoft.Windows.TlgAggregateInternal
-
-PS > $EnumProviders.TraceloggingProviders.Events | Select-Object -First 3 EventName, Level, KeywordHex
-
-EventName                          Level KeywordHex
----------                          ----- ----------
-KerbAcceptSecurityContextStart         4 0x0
-KerbAcceptSecurityContextStop          4 0x0
-KerbAcquireCredentialsHandleStart      4 0x0
+ETW provider snapshot (before)
+        ↓
+Start Sysmon ETW capture
+        ↓
+Execute sample under test
+        ↓
+Stop capture (5 s flush buffer)
+        ↓
+ETW provider snapshot (after) + tamper diff
+        ↓
+Parse ETL → analyse CallTrace → flag anomalies
+        ↓
+JSON report
 ```
 
-> **TraceLogging caveat - events are not individually mapped to a provider.** TraceLogging metadata is compiled into the binary itself as a `_TraceLoggingMetadata_t` structure beginning with the four-byte signature `ETW0`. It carries an array of provider metadata and an array of event metadata, but no per-event provider ID - and across every shipping Windows binary surveyed (1891 in System32 + drivers), events consistently appear before providers in the stream, so order can't be used to bind them either. `Providers` and `Events` are returned as separate flat lists - we deliberately don't pretend to bind them. If you need a real binding, do static analysis on the binary; the [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) IDA plugin maps `TraceLoggingWrite` call sites back to their registered provider handles and is the most practical route today. Better approaches to in-tool attribution are being actively explored.
+### Usage
 
-`Get-EtwTraceSessions` is also another cmdlet that allows someone to query trace sessions locally and remotely. You can query regular trace sessions, trace sessions that live in a data collector, and/or both. 
+```powershell
+# Basic run
+.\Invoke-SyscallDetect.ps1 -SamplePath .\malware.exe
 
+# Keep the raw ETL for further analysis
+.\Invoke-SyscallDetect.ps1 -SamplePath .\malware.exe -KeepEtl
 
-### Snapshots & Versioning
-`Export-EtwSnapshot` and `Compare-EtwSnapshot` let you track changes to ETW providers over time - for example, to see what a Windows update changed about provider definitions, what new events were introduced, or which event metadata changed. Snapshot one machine (or take a snapshot before an update), snapshot another (or take a snapshot after the update), and diff the two.
+# Custom output dir and timeout
+.\Invoke-SyscallDetect.ps1 -SamplePath .\malware.exe -OutputDir C:\research -TimeoutSeconds 60
 
-#### Export-EtwSnapshot
-Serializes Manifest, MOF, and TraceLogging providers on the local machine to a snapshot file. (WPP, the fourth ETW provider type, is not yet supported. MOF *providers* are listed but their *events* don't populate today - their event metadata isn't reliably present in WMI. Better approaches to MOF event enumeration are being actively explored.)
-
-**Default scan paths for TraceLogging** - TraceLogging metadata is compiled into individual binaries (DLLs/EXEs/SYS files) rather than registered with the OS, so finding it requires scanning files for the embedded `ETW0` signature. By default `Export-EtwSnapshot` walks:
-
-- `C:\Windows\System32` (`*.dll`, `*.exe`)
-- `C:\Windows\System32\drivers` (`*.sys`)
-
-This adds roughly 30-60 seconds to the export. Use `-SkipTraceLogging` to skip the scan entirely, or `-ScanPath` to add additional directories (e.g. `C:\Program Files\YourApp`).
-
-The output format is chosen by file extension:
-- `.ndjson` or `.jsonl` - newline-delimited JSON. The first line is a header (`SchemaVersion`, `OSVersion`); each subsequent line is one full provider record. Recommended for diffing (line-based diff tools align cleanly per provider) and for stream-ingestion into a database or web service.
-- any other extension - pretty-printed JSON, one big object containing the providers array. Easier to eyeball, larger on disk, harder to diff at scale.
-
-```
-PS > Export-EtwSnapshot C:\Snapshots\baseline.ndjson                                # Manifest + MOF + TraceLogging (default)
-PS > Export-EtwSnapshot C:\Snapshots\fast.ndjson -SkipTraceLogging                  # Manifest + MOF only (~5s)
-PS > Export-EtwSnapshot C:\Snapshots\full.ndjson -ScanPath 'C:\Program Files\App'   # also scan a custom dir
-PS > Export-EtwSnapshot C:\Snapshots\baseline.json                                  # pretty JSON
+# Point at a specific module build
+.\Invoke-SyscallDetect.ps1 -SamplePath .\malware.exe `
+    -ModulePath .\EtwInspector\EtwInspectorModule\EtwInspector.psd1
 ```
 
-The snapshot captures the OS version (`Major.Minor.Build.UBR`, read from the registry), provider GUID, name, schema source, resource file path or `Sources[]` array (TraceLogging providers can be embedded in multiple binaries; `Sources` lists every file the provider was discovered in), keywords, and per-event Id, Version, Level, Opcode, Task, Keywords, Description, and Template. Providers are sorted by name; events are sorted deterministically so two snapshots of identical state produce byte-stable output.
+### Parameters
 
-> **TraceLogging events are listed under every provider in the binary, not bound to a specific one.** TraceLogging metadata is compiled into the binary itself as a `_TraceLoggingMetadata_t` structure beginning with the four-byte signature `ETW0`. It carries an array of provider metadata and an array of event metadata, but no per-event provider ID. When a binary declares multiple TraceLogging providers, each one ends up listed against the binary's full event set. If you need a real per-event binding, do static analysis on the binary via IDA or leverage a plugin like - [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) which walks `TraceLoggingWrite` calls and recovers the actual mapping. Better approaches to in-tool attribution are being actively explored.
+| Parameter | Default | Description |
+|---|---|---|
+| `-SamplePath` | *(required)* | Path to the binary under test |
+| `-OutputDir` | `C:\research` | Root directory for run output |
+| `-TimeoutSeconds` | `30` | Max time to wait for sample to exit |
+| `-ModulePath` | *(auto)* | Path to `EtwInspector.psd1` if not on PSModulePath |
+| `-KeepEtl` | off | Retain the raw `.etl` capture file |
 
-> **Same name, different GUIDs.** TraceLogging provider identity in the snapshot is the GUID, not the name. The runtime normally derives the GUID deterministically from the upper-cased name (per the TraceLogging spec), but a developer can explicitly override it in `TRACELOGGING_DEFINE_PROVIDER`. When that happens you'll see multiple entries with the same `ProviderName` and different `ProviderGuid` values, each with its own `Sources[]` and events. Real example: `RDP` has four different GUIDs in System32 across different binaries.
-
-#### Compare-EtwSnapshot
-Loads two snapshots (A and B) and returns a structured diff. Both `.json` and `.ndjson`/`.jsonl` are accepted - and the two paths can use different formats (e.g. compare a legacy `.json` baseline against a new `.ndjson` snapshot).
-
-```
-PS > $diff = Compare-EtwSnapshot C:\Snapshots\baseline.json C:\Snapshots\current.json
-
-PS > $diff
-
-OSVersionA       : 10.0.26100.0
-OSVersionB       : 10.0.26200.0
-ProvidersAdded   : {Microsoft-Windows-NewProvider}
-ProvidersRemoved : {}
-ProvidersChanged : {Microsoft-Windows-Threat-Intelligence, Microsoft-Windows-Kernel-Process...}
-```
-
-For each provider in `ProvidersChanged`:
-- `ProviderFieldsChanged` - provider-level field changes (e.g. `ResourceFilePath`), each with `A` and `B` values
-- `EventsAdded` / `EventsRemoved` - events present in only one side, keyed by `Id`+`Version`
-- `EventsChanged` - events in both sides whose metadata differs, with per-field `A`/`B` values
-
-Filter the diff by a provider name substring with `-ProviderName` (case-insensitive):
+### Example output
 
 ```
-PS > Compare-EtwSnapshot C:\Snapshots\baseline.json C:\Snapshots\current.json -ProviderName Threat
+=== Preflight ===
+[+] Sample: .\Tartarus_Gate_POC.exe
+[+] EtwInspector loaded
+[+] Sysmon64 running
+[+] Output: C:\research\Tartarus_Gate_POC_20260607_123918
+
+=== Syscall Anomaly Analysis ===
+[!] 1 anomaly(s) found!
+
+  Detection     : INDIRECT_SYSCALL
+  EventId       : 10
+  SourceProcess : C:\...\Tartarus_Gate_POC.exe
+  TargetProcess : C:\Windows\System32\RuntimeBroker.exe
+  GrantedAccess : 0x1FFFFF
+  CallTrace:
+    C:\Windows\SYSTEM32\ntdll.dll+9cd74
+    C:\...\Tartarus_Gate_POC.exe+15f6
+    C:\...\Tartarus_Gate_POC.exe+1b80
+    C:\Windows\System32\KERNEL32.DLL+17034
+    C:\Windows\SYSTEM32\ntdll.dll+52651
 ```
 
-You can also persist a diff for review or sharing:
+### Output files
+
+Each run creates a timestamped folder under `OutputDir`:
 
 ```
-PS > $diff | ConvertTo-Json -Depth 20 | Set-Content C:\Snapshots\diff.json
+C:\research\sample_20260607_123918\
+    capture.etl              # raw Sysmon ETL (only with -KeepEtl)
+    snapshot_before.ndjson   # ETW provider state before execution
+    snapshot_after.ndjson    # ETW provider state after execution
+    provider_diff.json       # diff (only written if changes detected)
+    report.json              # full structured JSON report
 ```
 
-#### Visual diffing with VS Code
-For a side-by-side view of two snapshots, use NDJSON output and VS Code's built-in diff:
+---
+
+## New cmdlets
+
+### Import-EtwFile
+
+Parses a `.etl` file and returns events as PowerShell objects.
+
+```powershell
+$events = Import-EtwFile C:\research\capture.etl
+
+# Inspect Sysmon ProcessAccess events
+$events | Where-Object Id -eq 10 | Select-Object TimeStamp, Payload
+
+# Group by event ID
+$events | Group-Object Id | Sort-Object Count -Descending
+```
+
+Each returned object has:
+- `TimeStamp` — event timestamp
+- `Id` — ETW event ID (e.g. 10 for Sysmon ProcessAccess)
+- `ProviderName` — ETW provider name
+- `Payload` — hashtable of all event fields (e.g. `CallTrace`, `SourceImage`)
+
+### Get-EtwKeywordMask
+
+Resolves human-readable keyword names to their bitmask value for use with `Start-EtwCapture -Keywords`.
+
+```powershell
+# List all keywords for a provider
+Get-EtwKeywordMask -ProviderGuid "f4e1897c-bb5d-5668-f1d8-040f4d8dd344" -ListKeywords
+
+# Build a mask for specific keywords
+$mask = Get-EtwKeywordMask -ProviderGuid "f4e1897c-bb5d-5668-f1d8-040f4d8dd344" `
+    -Keywords "KERNEL_THREATINT_KEYWORD_ALLOCVM_REMOTE","KERNEL_THREATINT_KEYWORD_WRITEVM_REMOTE"
+
+Start-EtwCapture -ProviderGuids "f4e1897c-bb5d-5668-f1d8-040f4d8dd344" `
+    -Keywords $mask -OutputFilePath C:\research\msti.etl
+```
+
+### Receive-EtwCapture
+
+Streams live events from a running capture session into the pipeline.
+
+```powershell
+$session = Start-EtwCapture -ProviderGuids "5770385f-c22a-43e0-bf4c-06f5698ffbd9" `
+    -TraceName "LiveCapture" -OutputFilePath C:\research\live.etl
+
+# Stream events in real time (Ctrl+C to stop)
+$session | Receive-EtwCapture | Where-Object Id -eq 10 | ForEach-Object {
+    Write-Host "$($_.Payload['SourceImage']) -> $($_.Payload['TargetImage'])"
+}
+```
+
+---
+
+## TartarusGatePOC — research validation sample
+
+A purpose-built C + MASM x64 binary that demonstrates indirect syscall injection and validates the detection pipeline end-to-end.
+
+### Technique
+
+- **Hell's Gate** — reads SSN directly from ntdll stub bytes (`4C 8B D1 B8 [SSN]`)
+- **Tartarus' Gate** — if the stub is hooked, recovers the SSN from a clean neighbouring stub via ordinal arithmetic
+- **Indirect syscall** — jumps to ntdll's own `syscall;ret` gadget so the return address seen by the kernel is inside ntdll
+
+### Syscall stubs (syscalls.asm)
+
+The x64 MASM stubs read SSN values from globals that are populated at runtime by the resolver:
+
+```asm
+ZwOpenProcess PROC
+    mov  r10, rcx                           ; Windows syscall ABI
+    mov  eax, dword ptr [g_ssnNtOpenProcess] ; SSN set at runtime
+    jmp  qword ptr [g_pGadget]              ; indirect: lands in ntdll
+ZwOpenProcess ENDP
+```
+
+### Injection flow
 
 ```
-PS > code --diff C:\Snapshots\vmA.ndjson C:\Snapshots\vmB.ndjson
+1. Enumerate ntdll EAT -> resolve SSN for each syscall
+2. Find ntdll's "syscall;ret" gadget -> set g_pGadget
+3. ZwOpenProcess(RuntimeBroker.exe, PROCESS_ALL_ACCESS)  -> Sysmon Event 10
+4. ZwAllocateVirtualMemory -> allocate "calc\0" in target
+5. ZwWriteVirtualMemory   -> write "calc\0"
+6. ZwCreateThreadEx at WinExec("calc", 1)               -> Sysmon Event 8
 ```
 
-Because each provider lives on its own line, the diff aligns per provider with no cascading line offsets - even when providers are added or removed.
+### Build
 
+Open the `TartarusGatePOC` folder as a Visual Studio project:
 
-### Capture
-EtwInspector also holds cmdlets, `Start-EtwCapture` and `Stop-EtwCapture` that allows a users to start and stop ETW trace sessions locally. These are fairly straight forward. Feel free to call `Get-Help Start-EtwCapture -Examples` for more details. 
+1. **File → Open → Folder** → select `TartarusGatePOC\`
+2. Right-click project → **Build Dependencies → Build Customizations** → check `masm`
+3. Right-click `syscalls.asm` → Properties → **Item Type: Microsoft Macro Assembler**
+4. Set platform to **x64** → **Build → Build Solution**
 
+---
 
-## Previous Versions
-If you prefer to use EtwInspector 1.0, which is written in C++ please visit the `v1.0` branch. 
+## Original ETWInspector cmdlets
 
-## Feedback
-If there are any features you would like to see, please don't hesitate to reach out. 
+All original cmdlets are unchanged. Full documentation below.
 
-Thank you to the following people who were willing to test this tool and provide feedback: 
-- Olaf Hartong
-- Matt Graeber
+### Get-EtwProviders
 
-## Resources/Nuget Packages:
-* Fody
-* Microsoft.Diagnostics.Tracing.TraceEvent
-* XmlDoc2CmdletDoc
+Enumerates Manifest, MOF, and TraceLogging ETW providers.
 
-## Release Notes
+```powershell
+# Find providers by name
+$p = Get-EtwProviders -ProviderName "Threat-Intelligence"
+$p.RegisteredProviders | Select-Object providerName, providerGuid
 
-v1.2.0
-* `Export-EtwSnapshot` now includes TraceLogging providers by default. Scans `C:\Windows\System32` and `C:\Windows\System32\drivers` for the embedded ETW0 metadata, merges the same provider across the binaries it appears in, and records every source path on a new `Sources[]` field on the provider record
-* New parameters: `-SkipTraceLogging` for the fast Manifest+MOF-only path, `-ScanPath <string[]>` to add custom directories to the TraceLogging scan
-* Snapshot `SchemaVersion` bumped to `1.1` (adds the `Sources[]` field; older readers that ignore unknown fields keep working)
+# Find providers with a specific keyword in any property
+Get-EtwProviders -PropertyString "AllocVm"
 
-v1.1.0
-* Added `Export-EtwSnapshot` and `Compare-EtwSnapshot` for diffing provider state across machines or across Windows updates
-* Snapshots support both pretty JSON (`.json`) and newline-delimited JSON (`.ndjson` / `.jsonl`); NDJSON diffs cleanly per provider and is ideal for stream-ingestion
-* Snapshot output is now deterministic - providers sorted by name, events sorted by `(Id, Version)` - so identical state produces byte-stable files
-* Sped up MOF provider enumeration by indexing `.mof` files once instead of per-provider
+# Enumerate TraceLogging providers from a specific binary
+Get-EtwProviders -ProviderType TraceLogging -FilePath C:\Windows\System32\kerberos.dll
+```
 
-v1.0.0
-* Initial release of package
-* Following Cmdlets: 
-    * Get-EtwProviders 
-    * Get-EtwSecurityDescriptor 
-    * Get-EtwTraceSessions
-    * Start-EtwCapture
-    * Stop-EtwCapture
+> **TraceLogging caveat:** Events are not individually bound to a provider in the binary metadata — provider and event records appear in separate arrays with no cross-reference. Both are returned as flat lists. For static binding, use the [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) IDA plugin.
 
+### Get-EtwTraceSessions
 
+Queries active trace sessions locally or remotely.
+
+```powershell
+Get-EtwTraceSessions
+Get-EtwTraceSessions -ComputerName remotehost
+```
+
+### Export-EtwSnapshot / Compare-EtwSnapshot
+
+Snapshot provider state and diff across machines or Windows versions.
+
+```powershell
+Export-EtwSnapshot C:\Snapshots\baseline.ndjson
+Export-EtwSnapshot C:\Snapshots\baseline.ndjson -SkipTraceLogging   # faster, no TraceLogging scan
+
+$diff = Compare-EtwSnapshot C:\Snapshots\before.ndjson C:\Snapshots\after.ndjson
+$diff | ConvertTo-Json -Depth 20 | Set-Content C:\Snapshots\diff.json
+
+# Side-by-side in VS Code
+code --diff C:\Snapshots\before.ndjson C:\Snapshots\after.ndjson
+```
+
+### Start-EtwCapture / Stop-EtwCapture
+
+```powershell
+$session = Start-EtwCapture -ProviderGuids "5770385f-c22a-43e0-bf4c-06f5698ffbd9" `
+    -TraceName "MySysmonCapture" -OutputFilePath C:\research\capture.etl
+
+# ... run sample ...
+
+$session | Stop-EtwCapture
+```
+
+---
+
+## Resources
+
+- [ETWInspector (original)](https://github.com/tsale/ETWInspector) — base project
+- [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) — kernel-mode event source
+- [Microsoft.Diagnostics.Tracing.TraceEvent](https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent) — ETL parsing library
+- [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) — TraceLogging static analysis
+- [Fody / Costura.Fody](https://github.com/Fody/Costura) — single-DLL embedding
+
+---
+
+## Disclaimer
+
+The `TartarusGatePOC` is provided **for defensive security research only** — to validate detection pipelines in isolated, controlled lab environments. Only run it on systems you own. The techniques demonstrated (Hell's Gate, Tartarus' Gate, indirect syscalls) are documented in public security research; this implementation exists to give defenders a known-good sample to test their detection stack against.
+
+---
+
+## Credits
+
+Original ETWInspector developed by [tsale](https://github.com/tsale).  
+Thanks to Olaf Hartong and Matt Graeber for testing feedback on the original project.
